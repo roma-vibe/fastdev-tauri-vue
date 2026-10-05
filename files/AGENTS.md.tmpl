@@ -1,0 +1,227 @@
+# {{ project.name }} — agent guide
+
+Rules and workflows for AI coding agents working in this repository. Humans start with `README.md`.
+{%- if options.spec_md %}
+
+**Read `SPEC.md` first.** It defines what this project must do. If it is incomplete, complete it with the owner before building features, and keep it current as decisions are made.
+{%- endif %}
+
+## Stack
+
+- **Desktop shell:** Tauri 2 — a native macOS window with the system WebView (WKWebView, Safari engine), a Rust process behind it, and the Tauri CLI that runs, builds and bundles the app (`.app`, `.dmg`). macOS 14 or newer.
+- **Core (Rust, edition 2024):** everything that is not drawing the UI — business rules, storage, files, system access. SQLite through `rusqlite` (bundled SQLite, no system library), plain SQL migrations, `thiserror` errors, `log` + `tauri-plugin-log`.
+- **UI (TypeScript):** Vue 3 (`<script setup lang="ts">`), Vite 8, Vue Router 5 (hash history), Pinia 4, Tailwind CSS 4 with macOS-style design tokens.
+- **Tooling:** TypeScript 6 strict, ESLint 10 flat config, Prettier 3, Vitest 5 (happy-dom), Clippy and rustfmt, Node.js ≥ 24 running the helper scripts in `scripts/` directly (type stripping, no build step).
+
+## Project map
+
+```text
+.env / .env.example         All configuration (single source of truth); .env is git-ignored
+package.json                npm scripts (see Commands) and the UI dependencies
+scripts/tauri.ts            `npm run dev|build|tauri`: runs the Tauri CLI with the settings from .env
+scripts/tauri-config.ts     .env → Tauri `--config` patch (productName, identifier, devUrl)
+scripts/env.ts              Reads .env (Node's built-in parser) for scripts/tauri.ts and vite.config.ts
+vite.config.ts              Vite + Vitest config: PUBLIC_ENV_KEYS, dev server port, build target
+index.html                  %APP_NAME% is replaced at build time
+app-icon.svg                Source of the app icon (`npm run tauri icon app-icon.svg` regenerates src-tauri/icons)
+data/                       SQLite database of debug builds (`npm run dev`), git-ignored
+src/                        The UI (Vue)
+  main.ts, App.vue          Bootstrap and window layout (sidebar + content, drag regions)
+  config.ts                 appName (from import.meta.env.APP_NAME)
+  router/index.ts           Routes (hash history)
+  api/invoke.ts             The ONLY module that calls Tauri: call<T>(command, args), ApiError
+  api/<feature>.ts          Typed client per Rust feature (types mirror the Rust structs)
+  stores/                   Pinia setup stores, one per domain
+  pages/                    Route components (<Name>Page.vue)
+  components/               Presentational components: props in, events out
+  lib/                      Framework-free helpers (formatting, …)
+  styles/main.css           Tailwind entry, design tokens (@theme) and their dark values
+test/                       Vitest tests of the UI (stores, components, api)
+src-tauri/                  The app (Rust)
+  tauri.conf.json           Window, security (CSP), bundle; productName/identifier are placeholders
+  capabilities/default.json Permissions of the main window (core and plugin APIs)
+  icons/                    App icons (generated from app-icon.svg)
+  Cargo.toml, Cargo.lock    Package and binary `{{ env.APP_SLUG }}` (APP_SLUG), library `app_lib`
+  src/main.rs               Calls app_lib::run()
+  src/lib.rs                Builder: plugins, setup (data folder, database, state), command list
+  src/error.rs              AppError → { code, message } for the UI; AppResult<T>
+  src/app_info.rs           get_app_info command (name, version, build, data folder)
+  src/db/mod.rs             Database (one SQLite connection), migrations runner
+  src/db/migrations/        NNN_snake_case.sql, embedded with include_str!
+  src/notes/                The example feature: commands.rs → service.rs → repository.rs, model.rs
+{%- if choices.docker != "none" %}
+Dockerfile                  Linux toolchain image (Node.js 24 + Rust + the libraries Tauri compiles against)
+docker-compose.yml          {% if choices.docker == "full" %}`dev` service: web toolchain and dev server{% else %}`check` service: clean quality gate{% endif %}; volumes for Linux node_modules and Rust builds
+{%- endif %}
+```
+
+## Architecture rules
+
+Every action of the user goes through the same layers; each layer talks only to the next one:
+
+```text
+Vue page → Pinia store → API client (src/api) → invoke → Tauri command → service → repository → SQLite
+```
+
+- **Components** (`src/components`) are presentational: props in, events out, `v-model` via `defineModel`. They never use stores or the API.
+- **Pages** (`src/pages`) and `App.vue` read store state and call store actions. They never call the API client.
+- **Stores** (`src/stores`) own UI state and call the API client. Actions catch errors, expose them as state (`error`) and return a success flag; they never throw.
+- **API clients** (`src/api/<feature>.ts`) are thin typed wrappers around `call()` from `src/api/invoke.ts`, the only module that imports `@tauri-apps/api` (ESLint enforces this). Their types mirror the Rust structs: change both sides together.
+- **Commands** (`src-tauri/src/<feature>/commands.rs`) are the boundary to the UI: `#[tauri::command] pub async fn`, arguments and `State<'_, Service>` in, `AppResult<T>` out, one call to the service. No rules, no SQL. `async` runs them off the main thread so the window never freezes; for long work use `tauri::async_runtime::spawn_blocking` or emit progress events.
+- **Services** (`<feature>/service.rs`) hold the business rules and validation and return `AppError::Validation` / `AppError::NotFound` with messages for the user. Plain Rust: no Tauri types, no SQL — easy to test.
+- **Repositories** (`<feature>/repository.rs`) hold all SQL of a feature, through `Database::with`. Always bound parameters (`?1`), never values formatted into SQL; map rows to model structs.
+- **Wiring** happens only in `src-tauri/src/lib.rs`: `setup` creates the database, repositories and services and registers them with `app.manage(...)`; `generate_handler![...]` lists every command.
+- **Errors:** a command returns `AppResult<T>`; the UI receives `{ code, message }` (`validation`, `not_found`, `internal`) as an `ApiError`. Internal errors (database, files) are logged with details and reach the UI only as a generic message.
+- **Data:** debug builds keep the database in the project's `data/` folder, release builds in `~/Library/Application Support/<APP_IDENTIFIER>/` (`data_dir` in `lib.rs`). Logs go to the terminal and `~/Library/Logs/<APP_IDENTIFIER>/`.
+- **Security:** the WebView can only call the app's own commands and the permissions in `src-tauri/capabilities/default.json`. Grant the narrowest permission a feature needs; keep the CSP in `tauri.conf.json` strict (no remote scripts). Anything privileged (files, network, shell) belongs in Rust behind a command that validates its input.
+
+## Commands
+{% set in_dev = "docker compose run --rm dev " if choices.docker == "full" else "" -%}
+{% if choices.docker == "full" %}
+**The web toolchain runs in Docker.** npm dependencies live in a Docker volume (Linux builds) and must never be installed on the host: do not run `npm install` or `npx <tool>` on this Mac. Two groups of commands:
+
+- **On the Mac** (they need macOS and start containers themselves): `npm run dev`, `npm run build`, `npm run tauri -- <command>`. They only use Node.js built-ins and run the Tauri CLI through `npx` (version from `package-lock.json`); `WEB_TOOLCHAIN=docker` in `.env` makes them serve and build the UI in the `dev` container.
+- **In the container**, everything else: `docker compose run --rm dev npm run <script>` — e.g. `docker compose run --rm dev npm run check`, `docker compose run --rm dev npm install <pkg>`.
+{% endif %}
+| Command | Use |
+| --- | --- |
+| `npm run dev` | Opens the app window: Vite on `WEB_PORT` ({{ ports.WEB_PORT }}) with hot reload for the UI; Rust changes in `src-tauri/` rebuild and restart the app. Stop with Ctrl+C or by closing the window |
+| `npm run build` | Release build: type-check, web build into `dist/`, optimized Rust build, `src-tauri/target/release/bundle/macos/<APP_NAME>.app` and `bundle/dmg/<APP_NAME>_<version>_aarch64.dmg` |
+| `npm run build -- --debug` | Faster unoptimized bundle with DevTools, in `src-tauri/target/debug/bundle` |
+| `npm run tauri -- <command>` | Any Tauri CLI command with the `.env` settings (`npm run tauri info`, `npm run tauri icon app-icon.svg`) |
+| `npm test` | All tests: Vitest (`test/`, `scripts/`) and `cargo test` |
+| `npm run check` | **Quality gate:** ESLint + Clippy, Prettier + rustfmt check, vue-tsc, all tests; zero warnings |
+| `npm run lint` / `npm run lint:fix` | ESLint (UI) and Clippy (Rust, warnings are errors) / auto-fix ESLint problems |
+| `npm run format` | Prettier and rustfmt write the formatting |
+| `npm run typecheck` | `vue-tsc --build` for the UI, the scripts and the configs |
+| `npm run dev:web` / `npm run build:web` | The UI alone (the Tauri CLI starts them; in a plain browser the Rust commands are unavailable) |
+| `{{ in_dev }}npx vitest run test/notes.store.test.ts` | One UI test file; `cargo test --manifest-path src-tauri/Cargo.toml notes::` for Rust tests by name |
+| `{{ in_dev }}npm install <pkg>` / `cargo add <crate> --manifest-path src-tauri/Cargo.toml` | Add a UI / Rust dependency (lockfiles are committed) |
+{%- if choices.docker == "run" %}
+| `docker compose run --rm --build check` | The quality gate from a clean `npm ci` in a Linux container, like CI |
+{%- endif %}
+
+Never call `tauri` or `cargo tauri` directly for `dev`/`build`: without `scripts/tauri.ts` the app is built with the placeholder name and identifier of `tauri.conf.json`.
+
+## Configuration and environment
+
+- One `.env` in the project root; `.env.example` lists every key with a comment and is committed. Never commit `.env`. Values with spaces or quotes are single-quoted (`APP_NAME='My "Shop"'`); `scripts/env.ts` reads the file with Node's built-in dotenv parser (`parseEnv` from `node:util`) — never parse it by hand. The desktop app does **not** read `.env` at run time: values are applied when the app is built or started with `npm run dev`, so restart `npm run dev` after changing `.env`.
+- The app name comes **only** from `APP_NAME` in `.env`. `scripts/tauri.ts` passes it to Tauri as `productName` (window title, macOS menu bar, Dock, `.app`/`.dmg` name; characters a file name cannot contain become spaces), `vite.config.ts` gives it to the UI (`appName` from `src/config.ts`, `%APP_NAME%` in `index.html`), Rust reads it as `app.package_info().name`. Never hardcode the name; `tauri.conf.json` keeps neutral placeholders (`app`, `com.example.app`) on purpose.
+- `APP_SLUG` ({{ env.APP_SLUG }}) is the Rust package and binary name in `src-tauri/Cargo.toml`. Dev builds are not bundled, so macOS keeps their WebView data (local storage, caches) in `~/Library/WebKit/{{ env.APP_SLUG }}` and `~/Library/Caches/{{ env.APP_SLUG }}`. To rename it, change `APP_SLUG` and `package.name` together and run `cargo build --manifest-path src-tauri/Cargo.toml` so `Cargo.lock` records the new name.
+- `APP_IDENTIFIER` ({{ env.APP_IDENTIFIER }}) is the bundle id and names the release data folder. Replace `com.example` with your reverse domain **before the first release**: changing it later moves the app's data to a new, empty folder.
+- `WEB_PORT` ({{ ports.WEB_PORT }}) is the Vite dev server the dev window loads (Tauri's `devUrl`).
+{%- if choices.docker != "none" %}
+- `COMPOSE_PROJECT_NAME` ({{ project.slug }}) names the Docker Compose stack.
+{%- endif %}
+{%- if choices.docker == "full" %}
+- `WEB_TOOLCHAIN=docker` makes `npm run dev`/`build` serve and build the UI in the `dev` container (`host` would use a local `node_modules`).
+{%- endif %}
+- Only keys listed in `PUBLIC_ENV_KEYS` (`vite.config.ts`) reach the UI, as `import.meta.env.<KEY>`; declare their types in `src/env.d.ts`. Everything in the UI bundle ships inside the app and can be read: never expose secrets.
+- To add a setting: add it to `.env.example` and `.env` with a comment; for the UI add it to `PUBLIC_ENV_KEYS` and `src/env.d.ts`; for Tauri configuration extend `tauriConfigPatch()` in `scripts/tauri-config.ts` (with a test); Rust code that needs a build-time value gets it through configuration or a command argument. Runtime settings chosen by the user belong in the database (or a settings file in the data folder), not in `.env`.
+- The version is `version` in `src-tauri/Cargo.toml` (Tauri reads it from there); keep `package.json` `version` equal.
+
+## How to
+
+### Add a feature (example: `tasks`)
+
+1. **Migration** `src-tauri/src/db/migrations/002_create_tasks.sql` and append it to `MIGRATIONS` in `src-tauri/src/db/mod.rs` (see below).
+2. **Rust module** `src-tauri/src/tasks/`:
+   - `model.rs`: `Task` (`#[derive(Serialize)]`, `#[serde(rename_all = "camelCase")]`) and input structs (`#[derive(Deserialize)]`, `deny_unknown_fields`).
+   - `repository.rs`: `TasksRepository { db: Arc<Database> }`, SQL only, row mapping, tests on `Database::in_memory()`.
+   - `service.rs`: `TasksService`, rules and validation (`AppError::Validation`, `AppError::NotFound`), tests.
+   - `commands.rs`: `#[tauri::command] pub async fn list_tasks(tasks: State<'_, TasksService>) -> AppResult<Vec<Task>>`, …
+   - `mod.rs`: `pub mod commands; mod model; mod repository; mod service;` and the `pub use` lines.
+3. **Wire** it in `src-tauri/src/lib.rs`: `mod tasks;`, `app.manage(tasks::TasksService::new(tasks::TasksRepository::new(db.clone())))` in `setup`, and every command in `generate_handler![...]`.
+4. **UI:** `src/api/tasks.ts` (types mirroring `model.rs` + `tasksApi` calling `call('list_tasks')` …) → `src/stores/tasks.ts` → page, route and components → tests in `test/`.
+
+The Notes example is the reference for every layer: `src-tauri/src/notes/`, `src-tauri/src/db/migrations/001_create_notes.sql`, `src/api/notes.ts`, `src/stores/notes.ts`, `src/pages/NotesPage.vue`, `src/components/Note*.vue` and their tests. When it is no longer useful, remove all of these, its route and sidebar link, its commands in `lib.rs`, and add a migration that drops the `notes` table.
+
+### Add a command to an existing feature
+
+Model/input structs → repository method (if SQL is needed) → service method with its rules → `#[tauri::command]` in `commands.rs` → register it in `generate_handler!` → Rust tests → client function in `src/api/<feature>.ts` → store action → UI test. Arguments are passed by name from TypeScript in camelCase (`call('delete_note', { id })`; a Rust argument `note_id` is `noteId` in TypeScript).
+
+### Add a migration
+
+- Create `src-tauri/src/db/migrations/NNN_snake_case.sql` with the next number and append `include_str!("migrations/NNN_snake_case.sql")` to `MIGRATIONS` in `src-tauri/src/db/mod.rs`. Each migration runs once, in its own transaction; `PRAGMA user_version` stores how many have run.
+- Never edit, reorder or delete a migration that may have run anywhere (including an installed release); write a new one.
+- Use `STRICT` tables, `INTEGER PRIMARY KEY` ids, `snake_case` columns, ISO 8601 UTC timestamps as `TEXT` (default `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`), and `REFERENCES … ON DELETE …` for relations (foreign keys are on).
+- Migrations run when the app starts and in every test database (`Database::in_memory()`). To reset development data, stop the app and delete `data/app.sqlite*`.
+
+### Add a page
+
+1. Create `src/pages/<Name>Page.vue` with `<script setup lang="ts">`.
+2. Register it in `src/router/index.ts` with a `name` and a lazy `component: () => import('@/pages/<Name>Page.vue')`.
+3. Add it to `links` in `src/components/AppSidebar.vue` (label and a 20×20 outline icon path).
+4. Get data from a store; move reusable UI into `src/components/`.
+
+### Use a Tauri plugin or a core API from the UI
+
+1. Add the plugin on both sides (`cargo add tauri-plugin-<name> --manifest-path src-tauri/Cargo.toml`, `npm install @tauri-apps/plugin-<name>`) and register it in `lib.rs` (`.plugin(tauri_plugin_<name>::init())`).
+2. Grant only the permissions you need in `src-tauri/capabilities/default.json` (e.g. `"dialog:allow-open"`); the generated schema in `src-tauri/gen/schemas` completes the names in editors after a build.
+3. Call it from a module in `src/api/` only. Prefer a Rust command when the operation needs validation or touches files, the network or the shell.
+
+### Change the window, icon or bundle
+
+- Window size, title bar, minimum size: `app.windows` in `src-tauri/tauri.conf.json`. The title bar is transparent (`titleBarStyle: "Overlay"`): elements with `data-tauri-drag-region` (the top strip of `App.vue` and `AppSidebar.vue`) move the window; keep interactive controls out of them.
+- Icon: edit `app-icon.svg` (1024×1024, artwork inside the 824×824 rounded square), run `npm run tauri icon app-icon.svg`, delete the Windows/iOS/Android files it also writes (`icons/android`, `icons/ios`, `Square*.png`, `StoreLogo.png`, `icon.ico`, `64x64.png`).
+- Release: bump `version` in `src-tauri/Cargo.toml` and `package.json`, run `npm run check` and `npm run build`. Builds are ad-hoc signed (`signingIdentity: "-"`) and run on this Mac; to distribute, set a Developer ID in `bundle.macOS.signingIdentity` and the `APPLE_*` notarization variables (see https://v2.tauri.app/distribute/sign/macos/). An Intel + Apple Silicon build: `rustup target add x86_64-apple-darwin`, then `npm run build -- --target universal-apple-darwin`.
+- The `.dmg` gets Finder's plain window layout: `scripts/tauri.ts` sets `CI=true` for builds so they never wait for permission to control Finder. `CI=false npm run build` gets the styled window (allow the Finder automation prompt).
+
+## Testing
+
+- `npm test` runs Vitest and `cargo test`.
+- **Rust** (`#[cfg(test)] mod tests` at the bottom of each file): services and repositories on `Database::in_memory()` (fresh, migrated, per test); `error.rs` checks what the UI receives. Commands are thin and tested through their services.
+- **UI** (`test/*.test.ts`, happy-dom): stores with `setActivePinia(createPinia())` and `vi.mock('@/api/<feature>.ts')`; components with `mount()` from `@vue/test-utils`, asserting rendered output and emitted events; `test/invoke.test.ts` mocks `@tauri-apps/api/core`.
+- **Scripts** (`scripts/*.test.ts`, `// @vitest-environment node`): reading `.env` and the Tauri configuration patch.
+- Every new feature or bug fix gets tests in the layer where the logic lives. After UI changes, also run `npm run dev` and try the flow in the window: unit tests do not render the real WebView.
+
+## Definition of done
+
+1. `npm run check` passes with **zero** errors and warnings (ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests){% if choices.docker == "full" %} — run it as `docker compose run --rm dev npm run check`{% endif %}.
+2. `npm run build` succeeds and the built app starts (`open src-tauri/target/release/bundle/macos/*.app`).
+3. New behaviour is covered by tests, and the changed flow works in `npm run dev`.
+4. Rust structs and their TypeScript mirrors (`src/api/*.ts`) match; new commands are registered in `lib.rs`; new permissions are the narrowest possible.
+5. Docs match the code: `.env.example`, `README.md`{% if options.spec_md %}, `SPEC.md`{% endif %} and this file are updated when commands, env keys, structure or rules change.
+
+## Conventions
+
+- **Rust:** edition 2024, `cargo fmt` formatting, Clippy clean with `-D warnings`, no `unsafe`. Errors through `AppError`/`AppResult`; no `unwrap()`/`expect()` outside tests and start-up invariants. Doc comments (`///`, `//!`) on modules and public items. Logging with `log::info!`/`log::error!`, never `println!`.
+- **TypeScript:** strict; no `any`, no `@ts-ignore`, no non-null assertions (`!`): narrow types instead. Erasable syntax only in `scripts/` (Node type stripping): no `enum`, `namespace` or parameter properties. Imports of project files include the extension (`@/stores/notes.ts`); type-only imports use `import type` or inline `type`.
+- **Naming:** Rust modules and SQL `snake_case`; commands `verb_noun` (`list_notes`); JSON/TypeScript `camelCase` (serde `rename_all = "camelCase"`); Vue components `PascalCase.vue`, pages `<Name>Page.vue`; stores `use<Name>Store`; API clients `<name>Api`.
+- **UI:** Tailwind utilities with the design tokens from `src/styles/main.css` (`bg-window`, `bg-sidebar`, `bg-panel`, `text-ink`, `text-muted`, `border-line`, `bg-accent`, `text-danger`…) instead of raw colors; light and dark follow the system appearance. Keep it native: system font, 13–14 px text, default cursor, no page-level scrolling (the content area scrolls), `select-text` only where users copy text.
+- **Dependencies:** prefer the platform (Rust std, Tauri APIs, Web APIs) and existing packages; add a crate or package only when it clearly pays off. Commit `package-lock.json` and `src-tauri/Cargo.lock`. `@tauri-apps/api` and the `tauri` crate must stay on the same minor version (and `@tauri-apps/cli` with them).
+- **npm install scripts** of dependencies run only when `allowScripts` in `package.json` allows them (npm 11+). Review new ones with `npm install-scripts ls`; approve a package only when it really needs its script. `fsevents` is denied: it ships a prebuilt binary.
+- Let the formatters format (`npm run format`); do not disable lint rules to get green.
+- Write code, comments, UI texts and docs in English.
+{% if choices.docker != "none" %}
+## Docker
+
+A macOS app cannot run in a Linux container, so Docker never runs the app: the window, the Rust build and the bundle are always made on this Mac. The `Dockerfile` is a Linux toolchain (Node.js 24 + Rust + the WebKitGTK libraries Tauri compiles against on Linux, user `dev`); `docker-compose.yml` mounts the project at `/app` and keeps `node_modules`, `src-tauri/target` and the cargo registry in named volumes, so Linux builds never mix with the Mac's. `.dockerignore` sends no build context (the image copies nothing).
+{% if choices.docker == "full" %}
+Mode: **toolchain in Docker**. The `dev` service runs the Vite dev server on `0.0.0.0:{{ ports.WEB_PORT }}` (published). `npm run dev` on the Mac runs `docker compose up dev` as Tauri's `beforeDevCommand`, waits for it, then compiles and opens the window; hot reload works through the bind mount. `npm run build` runs `docker compose run --rm dev npm run build:web` and bundles `dist/` on the Mac.
+
+```sh
+docker compose run --rm dev npm install                  # after cloning or changing dependencies
+docker compose run --rm dev npm install <pkg>            # add a UI dependency
+docker compose run --rm dev npm run check                # the quality gate (Rust checks run on Linux)
+npm run dev                                              # dev window (starts the dev container)
+npm run build                                            # .app and .dmg
+docker compose build dev                                 # after changing the Dockerfile
+docker compose down --volumes --remove-orphans --rmi local   # delete containers, volumes and the image
+```
+
+Clippy in the container checks the Linux build of the crate; macOS-only code (`#[cfg(target_os = "macos")]`) is compiled by `npm run build` on the Mac, so run it before finishing such changes.
+{%- else %}
+Mode: **Docker for checks**. Development, the dev window and builds run on this Mac with Node.js and Rust. `docker compose run --rm --build check` runs `npm ci && npm run check` in a clean Linux container, like CI: use it before releases or when a check might depend on this Mac's setup. The first run builds the image and compiles the Rust dependencies for Linux (a few minutes); the volumes keep later runs fast.
+
+```sh
+docker compose run --rm --build check                        # clean install + full quality gate
+docker compose down --volumes --remove-orphans --rmi local   # delete the volumes and the image
+```
+
+Clippy in the container checks the Linux build of the crate; macOS-only code (`#[cfg(target_os = "macos")]`) is checked by `npm run check` on the Mac.
+{%- endif %}
+{% endif %}
+---
+
+Bootstrapped from `{{ skeleton.id }} {{ skeleton.version }}`.

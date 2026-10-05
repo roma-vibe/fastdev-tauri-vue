@@ -1,0 +1,74 @@
+# {{ project.name }} — Specification
+
+Status: draft · Created {{ project.created_at }}
+
+<!--
+Agents: this is the product specification and the source of truth for what to build.
+Complete it from the initial brief before implementing features: ask the owner about anything
+unclear, replace every guidance comment with real content, delete sections that do not apply,
+and keep the document current as decisions are made.
+-->
+
+## Initial brief
+
+{% if project.brief | trim %}{{ project.brief | trim }}{% else %}_No brief was given. Ask the owner what this app should do and record the answer here._{% endif %}
+
+## Goals
+
+<!-- 3–5 outcomes that define success. Why does this app exist, and how will we know it works? -->
+
+## Users
+
+<!-- Who uses it (one person on their own Mac, a team, customers?), what they need to get done, and how often. -->
+
+## Scope
+
+### In scope
+
+<!-- Capabilities of the first release. -->
+
+### Out of scope
+
+<!-- What is explicitly excluded for now (sync between devices, accounts, other platforms…), to keep the first release small. -->
+
+## Features
+
+<!--
+One subsection per feature: a user story, testable acceptance criteria and edge cases. Example:
+
+### Notes
+- As a user I can write short notes and see them newest first.
+- Acceptance: a title (1–200 characters) is required; blank titles are rejected with a message; deleting removes the note immediately; notes survive quitting the app.
+-->
+
+## Data model
+
+<!-- Entities with fields (type, constraints, defaults) and relations. Each change becomes a SQL migration in src-tauri/src/db/migrations/. Say what is stored locally (SQLite in ~/Library/Application Support/<APP_IDENTIFIER>), what files the app reads or writes, and how data is backed up, exported or migrated between versions. -->
+
+## Commands
+
+<!-- The Rust commands the UI calls (src-tauri/src/<feature>/commands.rs): name, arguments, result, errors (validation / not_found / internal). Also events the Rust side emits to the UI, if any. -->
+
+## UI
+
+<!-- Windows and pages, sidebar navigation, the main flows, empty / loading / error states, menu items and keyboard shortcuts (⌘N, ⌘,…), drag and drop, notifications. Light and dark follow the system appearance. -->
+
+## Platform and distribution
+
+<!-- Minimum macOS version (currently 14), Apple Silicon and/or Intel (universal build), how the app reaches users (direct .dmg download, Mac App Store), signing and notarization (Developer ID), auto-updates, the final bundle identifier (APP_IDENTIFIER). -->
+
+## Non-functional requirements
+
+<!-- Security (which system permissions and Tauri capabilities are needed, input validation, secrets in the Keychain — never in .env or the UI bundle), privacy (what leaves the machine), performance (start-up time, large data sets), accessibility (keyboard navigation, VoiceOver), offline behaviour, logging and crash diagnostics ({% if choices.docker != "none" %}checks can also run in Docker; {% endif %}the app itself always runs natively). -->
+
+## Open questions
+
+<!-- Decisions that need the owner. Remove an item once it is answered and record the answer in the relevant section. -->
+
+- _None yet._
+
+## Milestones
+
+<!-- Small, shippable increments in order. Each one ends with `npm run check` and `npm run build` passing and the built app tried on this Mac. -->
+
+1. _To be defined._

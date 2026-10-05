@@ -1,0 +1,43 @@
+[package]
+# The binary name: fastDev sets it to APP_SLUG from .env (it also names the WebView data folders of
+# dev builds). The display name comes from APP_NAME (productName, see scripts/tauri.ts).
+name = "app"
+version = "0.1.0"
+description = "The desktop app: Rust core and window (Tauri)"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[lib]
+# main.rs only calls app_lib::run(). The `_lib` suffix keeps the library name distinct from the
+# binary (https://github.com/rust-lang/cargo/issues/8519).
+name = "app_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-log = "2.10"
+log = "0.4"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Small, fast release binary (https://tauri.app/concept/size/).
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

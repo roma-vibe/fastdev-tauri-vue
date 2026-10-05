@@ -1,0 +1,37 @@
+# Linux containers for the toolchain. The desktop app itself is compiled, run and bundled on the
+# Mac (npm run dev, npm run build): a macOS app cannot run in a Linux container.
+{%- if choices.docker == "full" %}
+# Everything that can run in Linux runs here. `npm run dev` starts `docker compose up dev` (the web
+# UI with hot reload) for the dev window; `docker compose run --rm dev npm run <script>` runs any
+# npm script (check, test, lint, format, build:web).
+{%- else %}
+# `docker compose run --rm --build check` runs the whole quality gate from a clean `npm ci` (lint,
+# format, types, web and Rust tests), like CI.
+{%- endif %}
+# COMPOSE_PROJECT_NAME in .env names the stack.
+services:
+{%- if choices.docker == "full" %}
+  dev:
+    build: .
+    environment:
+      # Listen on all interfaces inside the container so the published port works.
+      WEB_HOST: 0.0.0.0
+    ports:
+      - '${WEB_PORT:-1420}:${WEB_PORT:-1420}'
+{%- else %}
+  check:
+    build: .
+    command: ['sh', '-c', 'npm ci --no-audit --no-fund && npm run check']
+{%- endif %}
+    volumes:
+      # Sources from the project folder. Dependencies and Rust builds stay in volumes: Linux builds
+      # must not mix with the Mac's node_modules and src-tauri/target.
+      - .:/app
+      - node_modules:/app/node_modules
+      - cargo_target:/app/src-tauri/target
+      - cargo_registry:/usr/local/cargo/registry
+
+volumes:
+  node_modules:
+  cargo_target:
+  cargo_registry:

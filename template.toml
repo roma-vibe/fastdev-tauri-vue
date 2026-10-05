@@ -1,0 +1,223 @@
+# Manifest reference: docs/manifest.md of the fastDev repository.
+schema = 1
+id = "tauri-vue"
+name = "Tauri + Vue"
+description = "A native macOS desktop app on Tauri 2: a Rust core with SQLite and a Vue 3 + TypeScript + Tailwind CSS 4 interface in the system WebView. A Notes example goes through every layer, with tests on both sides and a zero-warning quality gate; Dev opens the app window with hot reload, and Build makes an ad-hoc signed .app and .dmg. For small, fast desktop tools and local-first apps for the Mac."
+category = "desktop"
+languages = ["rust", "node"]
+tags = ["desktop", "macos", "tauri", "vue", "typescript", "tailwind", "sqlite", "rust", "native", "dmg", "local-first"]
+stack = [
+  "Tauri 2.12",
+  "Rust 1.90+ (edition 2024)",
+  "SQLite (rusqlite 0.40, bundled)",
+  "Vue 3.5",
+  "TypeScript 6.0",
+  "Vite 8",
+  "Tailwind CSS 4",
+  "Pinia 4",
+  "Vue Router 5",
+  "Vitest 5",
+  "ESLint 10 + Prettier 3",
+  "Clippy + rustfmt",
+  "Node.js 24+",
+]
+
+# The Command Line Tools (or Xcode) provide the linker and SDK that cargo and Tauri build with.
+[requirements]
+node = ">=24"
+npm = ">=10"
+cargo = ">=1.90"
+xcode-clt = "*"
+
+[env]
+APP_NAME = "{{ project.name }}"
+# The Rust package and binary name. Cargo rejects names that start with a digit or collide with
+# its own folders, so those slugs get an "app-" prefix.
+APP_SLUG = "{% if project.slug[:1] in '0123456789' or project.slug in ['build', 'deps', 'examples', 'incremental'] %}app-{% endif %}{{ project.slug }}"
+APP_IDENTIFIER = "com.example.{{ project.slug }}"
+
+[ports]
+WEB_PORT = 1420
+
+# package.json cannot read .env. The display name comes from APP_NAME via scripts/tauri.ts.
+[[set]]
+file = "package.json"
+path = ["name"]
+value = "{{ project.slug }}"
+
+[[set]]
+file = "package-lock.json"
+path = ["name"]
+value = "{{ project.slug }}"
+
+[[set]]
+file = "package-lock.json"
+path = ["packages", "", "name"]
+value = "{{ project.slug }}"
+
+# The Rust package (and so the binary) is named per project: macOS keeps the WebView data of
+# unbundled dev builds in ~/Library/{WebKit,Caches}/<binary name>, so a shared name would mix the
+# data of all projects. The library keeps its fixed name app_lib.
+[[set]]
+file = "src-tauri/Cargo.toml"
+path = ["package", "name"]
+value = "{{ env.APP_SLUG }}"
+
+[[set]]
+file = "src-tauri/Cargo.lock"
+path = ["package[name=app]", "name"]
+value = "{{ env.APP_SLUG }}"
+
+[[setup]]
+label = "Install npm dependencies"
+run = "npm install"
+
+[[setup]]
+label = "Download Rust crates"
+run = "cargo fetch --manifest-path src-tauri/Cargo.toml --locked"
+
+[commands.dev]
+label = "Dev"
+description = "Opens the app window: the UI reloads instantly, Rust changes rebuild and restart the app. The first start compiles Rust (about a minute)."
+run = "npm run dev"
+long = true
+primary = true
+
+[commands.build]
+label = "Build"
+description = "Release build: the .app in src-tauri/target/release/bundle/macos and the .dmg in bundle/dmg."
+run = "npm run build"
+
+[commands.open]
+label = "Open built app"
+description = "Starts the .app made by Build."
+run = "open src-tauri/target/release/bundle/macos/*.app"
+
+[commands.test]
+label = "Test"
+description = "Vitest (UI and scripts) and cargo test (Rust)."
+run = "npm test"
+
+[commands.check]
+label = "Check"
+description = "The quality gate: ESLint, Clippy, Prettier, rustfmt, vue-tsc and all tests, with zero warnings."
+run = "npm run check"
+
+[commands.lint]
+label = "Lint"
+description = "ESLint and Clippy; warnings are errors."
+run = "npm run lint"
+
+[commands.format]
+label = "Format"
+description = "Prettier and rustfmt write the formatting."
+run = "npm run format"
+
+# ---------------------------------------------------------------------------
+# Docker. A macOS app cannot run in a Linux container: the dev window and the .app/.dmg are always
+# built on the Mac. Docker takes over what can run in Linux: dependencies, checks, tests and the
+# web build. The app keeps its data on the Mac (project data/ folder in development, Application
+# Support in release builds), never in containers, so there is no data storage choice.
+# ---------------------------------------------------------------------------
+
+[choices.docker]
+label = "Docker"
+description = "How the project uses Docker. The app window, the Rust build and the .app/.dmg always stay on this Mac."
+default = "run"
+
+[choices.docker.options.none]
+label = "No Docker"
+description = "Everything runs on this Mac: Node.js for the UI toolchain, Rust for the app, both for checks and builds. No Docker files."
+
+[choices.docker.options.run]
+label = "Docker for checks"
+description = "Develop, run and build on this Mac with Node.js and Rust. “Docker check” runs the whole quality gate from a clean install in a Linux container (lint, format, types, UI and Rust tests), like CI."
+files = ["Dockerfile", "docker-compose.yml", ".dockerignore"]
+requirements = { docker = ">=24" }
+env = { COMPOSE_PROJECT_NAME = "{{ project.slug }}" }
+cleanup = "docker compose down --volumes --remove-orphans --rmi local"
+
+[choices.docker.options.run.commands.docker-check]
+label = "Docker check"
+description = "Clean npm install and the full quality gate in a Linux container. The first run builds the image (a few minutes)."
+run = "docker compose run --rm --build check"
+
+[choices.docker.options.run.commands.docker-clean]
+label = "Docker clean"
+description = "Deletes the check container's volumes (Linux node_modules and Rust build) and its image."
+run = "docker compose down --volumes --remove-orphans --rmi local"
+
+[choices.docker.options.full]
+label = "Toolchain in Docker"
+description = "npm packages are installed and run only in a Linux container: the Vite dev server with hot reload, lint, format, type checks, UI and Rust tests, and the web build. This Mac compiles, runs and bundles the app with Rust; Node.js here only starts the Tauri CLI (npx, version from package-lock.json)."
+files = ["Dockerfile", "docker-compose.yml", ".dockerignore"]
+requirements = { docker = ">=24" }
+env = { COMPOSE_PROJECT_NAME = "{{ project.slug }}", WEB_TOOLCHAIN = "docker" }
+setup = [
+  { label = "Build the toolchain image (first time: a few minutes)", run = "docker compose build dev" },
+  { label = "Install npm dependencies in the container", run = "docker compose run --rm dev npm install" },
+  { label = "Download Rust crates", run = "cargo fetch --manifest-path src-tauri/Cargo.toml --locked" },
+]
+cleanup = "docker compose down --volumes --remove-orphans --rmi local"
+
+[choices.docker.options.full.commands]
+test = { run = "docker compose run --rm dev npm test" }
+check = { run = "docker compose run --rm dev npm run check" }
+lint = { run = "docker compose run --rm dev npm run lint" }
+format = { run = "docker compose run --rm dev npm run format" }
+docker-down = { label = "Docker down", description = "Stops the dev container.", run = "docker compose down" }
+docker-clean = { label = "Docker clean", description = "Deletes the containers, their volumes (Linux node_modules and Rust build) and the image; run the setup again afterwards.", run = "docker compose down --volumes --remove-orphans --rmi local" }
+
+# docker-check exists only with "Docker for checks"; the other variants skip it.
+[verify]
+commands = ["check", "build", "docker-check"]
+variants = [{ docker = "full" }, { docker = "none" }]
+
+# Try the skeleton without creating a project (fastDev "Preview"). The dev window leaves WebView
+# data in ~/Library/{WebKit,Caches}/<APP_SLUG> and logs in ~/Library/Logs/<APP_IDENTIFIER>
+# (its data stays in the copy's data/): cleanup removes them when the preview copy is deleted.
+[preview]
+command = "dev"
+cleanup = 'rm -rf "$HOME/Library/WebKit/${APP_SLUG:?}" "$HOME/Library/Caches/${APP_SLUG:?}" "$HOME/Library/Logs/${APP_IDENTIFIER:?}"'
+message = "The app window opens on this Mac after the first Rust compile (about a minute); it may appear behind other windows. Open Notes, add a note (⌘↩) and delete one: the notes are kept in SQLite in ${PREVIEW_DIR}/data and survive a restart of the preview. Edit src/pages/HomePage.vue in ${PREVIEW_DIR} to see hot reload, or src-tauri/src/notes/service.rs to see the app rebuild and restart. Stop the preview to close the window."
+
+[updates]
+ecosystem = "npm"
+
+[translations.ru]
+"Tauri + Vue" = "Tauri + Vue"
+"A native macOS desktop app on Tauri 2: a Rust core with SQLite and a Vue 3 + TypeScript + Tailwind CSS 4 interface in the system WebView. A Notes example goes through every layer, with tests on both sides and a zero-warning quality gate; Dev opens the app window with hot reload, and Build makes an ad-hoc signed .app and .dmg. For small, fast desktop tools and local-first apps for the Mac." = "Нативное десктопное приложение для macOS на Tauri 2: ядро на Rust с SQLite и интерфейс на Vue 3 + TypeScript + Tailwind CSS 4 в системном WebView. Пример «Заметки» проходит через все слои, есть тесты с обеих сторон и контроль качества без предупреждений; Dev открывает окно приложения с горячей перезагрузкой, а сборка создаёт .app и .dmg с ad-hoc подписью. Для небольших быстрых утилит и local-first приложений для Mac."
+"Docker" = "Docker"
+"How the project uses Docker. The app window, the Rust build and the .app/.dmg always stay on this Mac." = "Как проект использует Docker. Окно приложения, сборка Rust и .app/.dmg всегда остаются на этом Mac."
+"No Docker" = "Без Docker"
+"Everything runs on this Mac: Node.js for the UI toolchain, Rust for the app, both for checks and builds. No Docker files." = "Всё работает на этом Mac: Node.js для инструментов интерфейса, Rust для приложения, оба — для проверок и сборок. Без файлов Docker."
+"Docker for checks" = "Docker для проверок"
+"Develop, run and build on this Mac with Node.js and Rust. “Docker check” runs the whole quality gate from a clean install in a Linux container (lint, format, types, UI and Rust tests), like CI." = "Разработка, запуск и сборка — на этом Mac с Node.js и Rust. «Docker: проверка» запускает весь контроль качества с чистой установки в Linux-контейнере (линтер, форматирование, типы, тесты интерфейса и Rust), как в CI."
+"Docker check" = "Docker: проверка"
+"Clean npm install and the full quality gate in a Linux container. The first run builds the image (a few minutes)." = "Чистая установка npm и полный контроль качества в Linux-контейнере. Первый запуск собирает образ (несколько минут)."
+"Docker clean" = "Docker: очистка"
+"Deletes the check container's volumes (Linux node_modules and Rust build) and its image." = "Удаляет тома контейнера проверки (Linux-версии node_modules и сборки Rust) и его образ."
+"Toolchain in Docker" = "Инструменты в Docker"
+"npm packages are installed and run only in a Linux container: the Vite dev server with hot reload, lint, format, type checks, UI and Rust tests, and the web build. This Mac compiles, runs and bundles the app with Rust; Node.js here only starts the Tauri CLI (npx, version from package-lock.json)." = "npm-пакеты устанавливаются и работают только в Linux-контейнере: dev-сервер Vite с горячей перезагрузкой, линтер, форматирование, проверка типов, тесты интерфейса и Rust, веб-сборка. Этот Mac компилирует, запускает и упаковывает приложение с Rust; Node.js здесь только запускает Tauri CLI (через npx, версия из package-lock.json)."
+"Build the toolchain image (first time: a few minutes)" = "Сборка образа с инструментами (в первый раз — несколько минут)"
+"Install npm dependencies in the container" = "Установка npm-зависимостей в контейнере"
+"Download Rust crates" = "Загрузка крейтов Rust"
+"Docker down" = "Docker: остановка"
+"Stops the dev container." = "Останавливает контейнер разработки."
+"Deletes the containers, their volumes (Linux node_modules and Rust build) and the image; run the setup again afterwards." = "Удаляет контейнеры, их тома (Linux-версии node_modules и сборки Rust) и образ; после этого повторите установку."
+"Dev" = "Dev"
+"Opens the app window: the UI reloads instantly, Rust changes rebuild and restart the app. The first start compiles Rust (about a minute)." = "Открывает окно приложения: интерфейс обновляется мгновенно, изменения в Rust пересобирают и перезапускают приложение. Первый запуск компилирует Rust (около минуты)."
+"Build" = "Сборка"
+"Release build: the .app in src-tauri/target/release/bundle/macos and the .dmg in bundle/dmg." = "Релизная сборка: .app в src-tauri/target/release/bundle/macos и .dmg в bundle/dmg."
+"Open built app" = "Открыть собранное приложение"
+"Starts the .app made by Build." = "Запускает .app, созданный командой «Сборка»."
+"Test" = "Тесты"
+"Vitest (UI and scripts) and cargo test (Rust)." = "Vitest (интерфейс и скрипты) и cargo test (Rust)."
+"Check" = "Проверка"
+"The quality gate: ESLint, Clippy, Prettier, rustfmt, vue-tsc and all tests, with zero warnings." = "Контроль качества: ESLint, Clippy, Prettier, rustfmt, vue-tsc и все тесты, без предупреждений."
+"Lint" = "Линтер"
+"ESLint and Clippy; warnings are errors." = "ESLint и Clippy; предупреждения считаются ошибками."
+"Format" = "Форматирование"
+"Prettier and rustfmt write the formatting." = "Prettier и rustfmt форматируют файлы."
+"Install npm dependencies" = "Установка npm-зависимостей"
+"The app window opens on this Mac after the first Rust compile (about a minute); it may appear behind other windows. Open Notes, add a note (⌘↩) and delete one: the notes are kept in SQLite in ${PREVIEW_DIR}/data and survive a restart of the preview. Edit src/pages/HomePage.vue in ${PREVIEW_DIR} to see hot reload, or src-tauri/src/notes/service.rs to see the app rebuild and restart. Stop the preview to close the window." = "Окно приложения откроется на этом Mac после первой компиляции Rust (около минуты), возможно — позади других окон. Откройте «Заметки», добавьте заметку (⌘↩) и удалите одну: заметки хранятся в SQLite в ${PREVIEW_DIR}/data и сохраняются после перезапуска предпросмотра. Измените src/pages/HomePage.vue в ${PREVIEW_DIR}, чтобы увидеть горячую перезагрузку, или src-tauri/src/notes/service.rs — приложение пересоберётся и перезапустится. Остановите предпросмотр, чтобы закрыть окно."

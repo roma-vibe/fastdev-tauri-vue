@@ -1,0 +1,2 @@
+# The image copies nothing from the project (docker-compose.yml mounts it): send no build context.
+*

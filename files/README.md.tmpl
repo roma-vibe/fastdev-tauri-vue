@@ -1,0 +1,110 @@
+# {{ project.name }}
+
+A native macOS desktop app built with [Tauri 2](https://v2.tauri.app): a Rust core with a SQLite database and a [Vue 3](https://vuejs.org) + TypeScript + Tailwind CSS interface in the system WebView. The release build is a small `.app` and a `.dmg`.
+
+## Requirements
+
+- macOS 14 or newer (Apple Silicon or Intel) with the Xcode Command Line Tools (`xcode-select --install`)
+- Rust 1.90 or newer (`rustup`, https://rustup.rs)
+{%- if choices.docker == "full" %}
+- Node.js 24 or newer with npm — on this Mac it only starts the Tauri CLI; npm packages are installed in Docker
+- Docker 24 or newer with Docker Compose
+{%- else %}
+- Node.js 24 or newer, npm 10 or newer
+{%- if choices.docker == "run" %}
+- Docker 24 or newer with Docker Compose (only for the containerized check)
+{%- endif %}
+{%- endif %}
+
+## Quick start
+
+```sh
+[ -f .env ] || cp .env.example .env   # first run after cloning
+{%- if choices.docker == "full" %}
+docker compose build dev
+docker compose run --rm dev npm install
+{%- else %}
+npm install
+{%- endif %}
+npm run dev
+```
+
+The first start compiles the Rust side (about a minute), then the app window opens. Edits to the UI (`src/`) appear instantly; edits to Rust (`src-tauri/src/`) rebuild and restart the app. Close the window or press Ctrl+C to stop.
+
+Release build:
+
+```sh
+npm run build
+open src-tauri/target/release/bundle/macos/*.app
+```
+
+The `.dmg` is in `src-tauri/target/release/bundle/dmg/`. Builds are ad-hoc signed: they run on this Mac; distributing them to others needs a Developer ID signature and notarization (see `AGENTS.md`).
+
+## Scripts
+{% if choices.docker == "full" %}
+`npm run dev`, `npm run build` and `npm run tauri` run on this Mac. Run every other script in the dev container: `docker compose run --rm dev npm run <script>`.
+{% endif %}
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | The app window with hot reload (Vite on port {{ ports.WEB_PORT }}) and Rust rebuilds |
+| `npm run build` | The release `.app` and `.dmg` in `src-tauri/target/release/bundle/` |
+| `npm run tauri -- <command>` | Any Tauri CLI command with the settings from `.env` |
+| `npm test` | UI tests (Vitest) and Rust tests (`cargo test`) |
+| `npm run check` | Lint (ESLint, Clippy), format check (Prettier, rustfmt), type check and all tests — the quality gate before commits |
+| `npm run lint` / `npm run lint:fix` | ESLint and Clippy / ESLint auto-fix |
+| `npm run format` | Format TypeScript, Vue and Rust files |
+| `npm run typecheck` | `vue-tsc` for the UI and the scripts |
+
+## Configuration
+
+All settings live in `.env` in the project root. It is git-ignored; `.env.example` documents every key and is committed. The values are applied when the app is started with `npm run dev` or built — the installed app does not read `.env`.
+
+| Key | Value | Description |
+| --- | --- | --- |
+| `APP_NAME` | `{{ env.APP_NAME }}` | App name: window title, menu bar, Dock, `.app`/`.dmg` name and the UI |
+| `APP_SLUG` | `{{ env.APP_SLUG }}` | Rust package and binary name; dev builds keep WebView data in `~/Library/WebKit/<APP_SLUG>` |
+| `APP_IDENTIFIER` | `{{ env.APP_IDENTIFIER }}` | macOS bundle identifier; release builds keep data in `~/Library/Application Support/<APP_IDENTIFIER>`. Set your own reverse domain before the first release |
+| `WEB_PORT` | `{{ ports.WEB_PORT }}` | Port of the Vite dev server the dev window loads |
+{%- if choices.docker != "none" %}
+| `COMPOSE_PROJECT_NAME` | `{{ project.slug }}` | Docker Compose project name |
+{%- endif %}
+{%- if choices.docker == "full" %}
+| `WEB_TOOLCHAIN` | `docker` | `npm run dev`/`build` serve and build the UI in the `dev` container |
+{%- endif %}
+
+## Project structure
+
+```text
+src/          The interface: Vue pages, components, Pinia stores, the typed client for Rust commands
+src-tauri/    The app: Rust commands, services, SQLite storage, window and bundle configuration
+scripts/      Development helpers (runs the Tauri CLI with the settings from .env)
+test/         UI tests
+data/         Database of development builds (git-ignored)
+```
+
+The example feature **Notes** shows every layer end to end: Vue page → Pinia store → API client → Tauri command → service → repository → SQL migration. The data of `npm run dev` stays in `data/`, so development never touches the data of an installed release.
+{% if choices.docker != "none" %}
+## Docker
+
+A macOS app cannot run in a Linux container: the window, the Rust build and the `.app`/`.dmg` are always made on this Mac. The Docker image is a Linux toolchain (Node.js and Rust); `node_modules` and Rust builds of the containers stay in Docker volumes.
+{% if choices.docker == "full" %}
+The npm dependencies, the Vite dev server, all checks and tests, and the web build run in the `dev` container:
+
+```sh
+docker compose run --rm dev npm install      # after cloning or changing dependencies
+npm run dev                                  # starts the dev container and opens the window
+docker compose run --rm dev npm run check    # any npm script
+npm run build                                # .app and .dmg (the web build runs in the container)
+docker compose down --volumes --rmi local    # delete the containers, volumes and image
+```
+{% else %}
+Development and builds run on this Mac. The `check` service runs the quality gate from a clean install in a Linux container, like CI:
+
+```sh
+docker compose run --rm --build check        # npm ci + npm run check
+docker compose down --volumes --rmi local    # delete the volumes and the image
+```
+{% endif %}{% endif %}
+## Contributing
+
+Run `{% if choices.docker == "full" %}docker compose run --rm dev {% endif %}npm run check` before every commit. It must pass without errors or warnings.
