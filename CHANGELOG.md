@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 — 2026-11-23
+
+_Not verified on the publishing machine: docker=run: Docker >=24; docker=full: Docker >=24._
+
+- Stricter CSP: no inline styles, base-uri 'none'; freezePrototype on.
+- rusqlite 0.43 and tokio 1.54.1: no known Rust vulnerabilities; the Linux-only glib advisory is ignored by exact id with its reason.
+- npm run check ends with npm run security (secbase); without secbase it fails, only SECBASE_OPTIONAL=1 skips it with a notice.
+- Docker publishes the Vite port on 127.0.0.1 only; AGENTS.md describes the security defaults.
+
 ## 1.0.0 — 2026-10-05
 
 - Initial version: native macOS desktop app on Tauri 2.12 with a Rust core (edition 2024, Rust 1.90+) and a Vue 3.5 + TypeScript 6.0 + Vite 8 + Tailwind CSS 4 interface, Pinia 4 and Vue Router 5; macOS 14+.

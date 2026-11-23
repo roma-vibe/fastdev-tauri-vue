@@ -57,9 +57,20 @@ One subsection per feature: a user story, testable acceptance criteria and edge 
 
 <!-- Minimum macOS version (currently 14), Apple Silicon and/or Intel (universal build), how the app reaches users (direct .dmg download, Mac App Store), signing and notarization (Developer ID), auto-updates, the final bundle identifier (APP_IDENTIFIER). -->
 
+## Security
+
+<!--
+secbase profile: `desktop` (secbase.json). Describe, and keep current:
+- Data stored and where: the SQLite database (debug builds: data/, releases: ~/Library/Application Support/<APP_IDENTIFIER>), other files the app writes, which of it is sensitive.
+- Secrets the app needs (API keys, tokens): kept in the macOS Keychain, never in files, .env, SQLite or the UI bundle.
+- What is exposed: the Rust commands the UI can call, the Tauri capabilities granted and why, hosts the Rust side talks to, files and folders it may read or write, deep links and other entry points.
+- Remote content: none in the WebView; the CSP stays strict.
+Before designing sign-in, input handling, outbound URLs, uploads or LLM features, read `secbase checklist <area>`.
+-->
+
 ## Non-functional requirements
 
-<!-- Security (which system permissions and Tauri capabilities are needed, input validation, secrets in the Keychain — never in .env or the UI bundle), privacy (what leaves the machine), performance (start-up time, large data sets), accessibility (keyboard navigation, VoiceOver), offline behaviour, logging and crash diagnostics ({% if choices.docker != "none" %}checks can also run in Docker; {% endif %}the app itself always runs natively). -->
+<!-- Security (see the Security section), privacy (what leaves the machine), performance (start-up time, large data sets), accessibility (keyboard navigation, VoiceOver), offline behaviour, logging and crash diagnostics ({% if choices.docker != "none" %}checks can also run in Docker; {% endif %}the app itself always runs natively). -->
 
 ## Open questions
 

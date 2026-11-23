@@ -9,7 +9,7 @@ Choose it for small, fast desktop tools and local-first apps for the Mac: a ~6 M
 | Layer | What | Version |
 | --- | --- | --- |
 | Desktop shell | Tauri (window, IPC, bundler), `tauri-plugin-log` | 2.12 |
-| Core | Rust, edition 2024; `rusqlite` with bundled SQLite; `thiserror` | 1.90+; 0.40 |
+| Core | Rust, edition 2024; `rusqlite` with bundled SQLite; `thiserror` | 1.90+; 0.43 |
 | UI | Vue, Vue Router, Pinia, Tailwind CSS | 3.5, 5, 4, 4.3 |
 | Build | Vite, TypeScript, vue-tsc | 8, 6.0, 3 |
 | Quality | ESLint + typescript-eslint + eslint-plugin-vue, Prettier, Vitest + happy-dom, Clippy, rustfmt | 10, 3, 5 |

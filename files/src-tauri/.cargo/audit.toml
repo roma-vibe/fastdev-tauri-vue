@@ -1,0 +1,14 @@
+# cargo-audit settings for this crate. `npm run security` (secbase) runs `cargo audit` here.
+#
+# Every entry ignores one advisory by its exact id, never a crate or a whole kind, and needs a
+# reason and the condition for removing it. A secbase.json `allow` entry cannot do that: all
+# cargo-audit findings share the rule `deps/cargo-audit` and the path `src-tauri/Cargo.lock`, so it
+# would hide every future Rust advisory too.
+[advisories]
+ignore = [
+  # glib 0.18.5 is unsound in `VariantStrIter` (fixed in glib 0.20). It comes only from Tauri's
+  # Linux GTK/WebKitGTK stack (gtk 0.18), which Tauri 2 has not moved past, so there is no update
+  # to take; it is not compiled into the macOS app, and this app does not call glib. Remove the
+  # entry once `cargo tree -i glib --target all` shows glib 0.20 or later.
+  "RUSTSEC-2024-0429",
+]

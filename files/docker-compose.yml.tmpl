@@ -16,11 +16,19 @@ services:
     environment:
       # Listen on all interfaces inside the container so the published port works.
       WEB_HOST: 0.0.0.0
+      # secbase is installed on the Mac, not in this image: `npm run check` here skips its security
+      # step with a notice. Run `npm run security` on the Mac too.
+      SECBASE_OPTIONAL: '1'
     ports:
-      - '${WEB_PORT:-1420}:${WEB_PORT:-1420}'
+      # Published on the Mac's loopback only: other machines on the network cannot reach it.
+      - '127.0.0.1:${WEB_PORT:-1420}:${WEB_PORT:-1420}'
 {%- else %}
   check:
     build: .
+    environment:
+      # secbase is installed on the Mac, not in this image: the security step is skipped here with a
+      # notice. Run `npm run security` on the Mac too.
+      SECBASE_OPTIONAL: '1'
     command: ['sh', '-c', 'npm ci --no-audit --no-fund && npm run check']
 {%- endif %}
     volumes:

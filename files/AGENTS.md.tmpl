@@ -21,6 +21,8 @@ package.json                npm scripts (see Commands) and the UI dependencies
 scripts/tauri.ts            `npm run dev|build|tauri`: runs the Tauri CLI with the settings from .env
 scripts/tauri-config.ts     .env → Tauri `--config` patch (productName, identifier, devUrl)
 scripts/env.ts              Reads .env (Node's built-in parser) for scripts/tauri.ts and vite.config.ts
+scripts/security.ts         `npm run security`: runs `secbase check` and passes its exit code through
+secbase.json                secbase profile (`desktop`) and written exceptions; see Security
 vite.config.ts              Vite + Vitest config: PUBLIC_ENV_KEYS, dev server port, build target
 index.html                  %APP_NAME% is replaced at build time
 app-icon.svg                Source of the app icon (`npm run tauri icon app-icon.svg` regenerates src-tauri/icons)
@@ -73,7 +75,7 @@ Vue page → Pinia store → API client (src/api) → invoke → Tauri command �
 - **Wiring** happens only in `src-tauri/src/lib.rs`: `setup` creates the database, repositories and services and registers them with `app.manage(...)`; `generate_handler![...]` lists every command.
 - **Errors:** a command returns `AppResult<T>`; the UI receives `{ code, message }` (`validation`, `not_found`, `internal`) as an `ApiError`. Internal errors (database, files) are logged with details and reach the UI only as a generic message.
 - **Data:** debug builds keep the database in the project's `data/` folder, release builds in `~/Library/Application Support/<APP_IDENTIFIER>/` (`data_dir` in `lib.rs`). Logs go to the terminal and `~/Library/Logs/<APP_IDENTIFIER>/`.
-- **Security:** the WebView can only call the app's own commands and the permissions in `src-tauri/capabilities/default.json`. Grant the narrowest permission a feature needs; keep the CSP in `tauri.conf.json` strict (no remote scripts). Anything privileged (files, network, shell) belongs in Rust behind a command that validates its input.
+- **Security:** the WebView can only call the app's own commands and the permissions in `src-tauri/capabilities/default.json`. Grant the narrowest permission a feature needs. Anything privileged (files, network, shell) belongs in Rust behind a command that validates its input (see Security below).
 
 ## Commands
 {% set in_dev = "docker compose run --rm dev " if choices.docker == "full" else "" -%}
@@ -90,7 +92,8 @@ Vue page → Pinia store → API client (src/api) → invoke → Tauri command �
 | `npm run build -- --debug` | Faster unoptimized bundle with DevTools, in `src-tauri/target/debug/bundle` |
 | `npm run tauri -- <command>` | Any Tauri CLI command with the `.env` settings (`npm run tauri info`, `npm run tauri icon app-icon.svg`) |
 | `npm test` | All tests: Vitest (`test/`, `scripts/`) and `cargo test` |
-| `npm run check` | **Quality gate:** ESLint + Clippy, Prettier + rustfmt check, vue-tsc, all tests; zero warnings |
+| `npm run check` | **Quality gate:** ESLint + Clippy, Prettier + rustfmt check, vue-tsc, all tests, `secbase check`; zero warnings |
+| `npm run security` | `secbase check` alone; extra arguments after `--` go to secbase (`npm run security -- --strict`) |
 | `npm run lint` / `npm run lint:fix` | ESLint (UI) and Clippy (Rust, warnings are errors) / auto-fix ESLint problems |
 | `npm run format` | Prettier and rustfmt write the formatting |
 | `npm run typecheck` | `vue-tsc --build` for the UI, the scripts and the configs |
@@ -172,12 +175,21 @@ Model/input structs → repository method (if SQL is needed) → service method 
 - `npm test` runs Vitest and `cargo test`.
 - **Rust** (`#[cfg(test)] mod tests` at the bottom of each file): services and repositories on `Database::in_memory()` (fresh, migrated, per test); `error.rs` checks what the UI receives. Commands are thin and tested through their services.
 - **UI** (`test/*.test.ts`, happy-dom): stores with `setActivePinia(createPinia())` and `vi.mock('@/api/<feature>.ts')`; components with `mount()` from `@vue/test-utils`, asserting rendered output and emitted events; `test/invoke.test.ts` mocks `@tauri-apps/api/core`.
-- **Scripts** (`scripts/*.test.ts`, `// @vitest-environment node`): reading `.env` and the Tauri configuration patch.
+- **Scripts** (`scripts/*.test.ts`, `// @vitest-environment node`): reading `.env`, the Tauri configuration patch and the security wrapper.
 - Every new feature or bug fix gets tests in the layer where the logic lives. After UI changes, also run `npm run dev` and try the flow in the window: unit tests do not render the real WebView.
+
+## Security
+
+- **Defaults** (secure from the first commit): a strict CSP (`'self'` only, no `'unsafe-inline'` or `'unsafe-eval'`, `base-uri 'none'`; Tauri adds hashes for the bundle's own inline code at build time, so put styles in CSS files or `:style` bindings, never in `<style>` tags or `style="…"` strings inserted as HTML), `freezePrototype: true` (no code may add to `Object.prototype`; a library that does so is replaced, not the setting), no `dangerous*` options and `withGlobalTauri` off in `src-tauri/tauri.conf.json`; minimal capabilities (no shell, no wide `fs` or `http` scope, no `remote`) in `src-tauri/capabilities/default.json`; no source maps and no forced DevTools in release builds (`vite.config.ts`, `Cargo.toml`); the secbase profile `desktop` in `secbase.json`.
+- **Commands are the trust boundary:** typed arguments, `#[serde(deny_unknown_fields)]` on every struct that comes from the UI, and a path from the UI is canonicalised and checked against an allowed base folder before use.
+- **Secrets** go to the macOS Keychain (from a Rust command, e.g. the `keyring` crate), never to files, `.env`, SQLite, `localStorage` or the UI bundle. The WebView loads **no remote content** (scripts, styles, frames, images): fetch in Rust and validate.
+- **Never weaken a default to make something work.** A blocked call means the work belongs in a Rust command, not in a looser CSP, a wider scope or `withGlobalTauri`. A real exception goes into `allow` in `secbase.json` with a written reason. A Rust advisory without a fix is ignored by its exact id in `src-tauri/.cargo/audit.toml` (reason and removal condition next to it), never by an `allow` for `deps/cargo-audit`, which would hide every Rust advisory; it starts with `RUSTSEC-2024-0429` (glib, Linux-only GTK stack of Tauri).
+- **Before touching** auth, input handling, outbound URLs, uploads, LLM features, CI or the desktop config (`tauri.conf.json`, capabilities), read `secbase checklist <area>` (`secbase checklist` lists the areas).
+- `npm run check` ends with `npm run security` (`secbase check`), which must pass. Install secbase once: `npm link` in `~/Documents/secbase`. Without it the step fails, in CI too; only `SECBASE_OPTIONAL=1` turns that into a skip with a notice{% if choices.docker != "none" %} (the Docker containers set it because secbase is not in the image, so run `npm run security` on this Mac too){% endif %}. Never set it to get a green check.
 
 ## Definition of done
 
-1. `npm run check` passes with **zero** errors and warnings (ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests){% if choices.docker == "full" %} — run it as `docker compose run --rm dev npm run check`{% endif %}.
+1. `npm run check` passes with **zero** errors and warnings (ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests, `secbase check`){% if choices.docker == "full" %} — run it as `docker compose run --rm dev npm run check`{% endif %}.
 2. `npm run build` succeeds and the built app starts (`open src-tauri/target/release/bundle/macos/*.app`).
 3. New behaviour is covered by tests, and the changed flow works in `npm run dev`.
 4. Rust structs and their TypeScript mirrors (`src/api/*.ts`) match; new commands are registered in `lib.rs`; new permissions are the narrowest possible.
@@ -198,7 +210,7 @@ Model/input structs → repository method (if SQL is needed) → service method 
 
 A macOS app cannot run in a Linux container, so Docker never runs the app: the window, the Rust build and the bundle are always made on this Mac. The `Dockerfile` is a Linux toolchain (Node.js 24 + Rust + the WebKitGTK libraries Tauri compiles against on Linux, user `dev`); `docker-compose.yml` mounts the project at `/app` and keeps `node_modules`, `src-tauri/target` and the cargo registry in named volumes, so Linux builds never mix with the Mac's. `.dockerignore` sends no build context (the image copies nothing).
 {% if choices.docker == "full" %}
-Mode: **toolchain in Docker**. The `dev` service runs the Vite dev server on `0.0.0.0:{{ ports.WEB_PORT }}` (published). `npm run dev` on the Mac runs `docker compose up dev` as Tauri's `beforeDevCommand`, waits for it, then compiles and opens the window; hot reload works through the bind mount. `npm run build` runs `docker compose run --rm dev npm run build:web` and bundles `dist/` on the Mac.
+Mode: **toolchain in Docker**. The `dev` service runs the Vite dev server on `0.0.0.0:{{ ports.WEB_PORT }}` (published on the Mac's `127.0.0.1` only). `npm run dev` on the Mac runs `docker compose up dev` as Tauri's `beforeDevCommand`, waits for it, then compiles and opens the window; hot reload works through the bind mount. `npm run build` runs `docker compose run --rm dev npm run build:web` and bundles `dist/` on the Mac.
 
 ```sh
 docker compose run --rm dev npm install                  # after cloning or changing dependencies
@@ -211,6 +223,8 @@ docker compose down --volumes --remove-orphans --rmi local   # delete containers
 ```
 
 Clippy in the container checks the Linux build of the crate; macOS-only code (`#[cfg(target_os = "macos")]`) is compiled by `npm run build` on the Mac, so run it before finishing such changes.
+
+**Security gate:** secbase is not in the image, so the `dev` service sets `SECBASE_OPTIONAL=1` and `npm run check` in the container only prints `secbase skipped: …`. In this mode you must also run `npm run security` on the Mac before finishing.
 {%- else %}
 Mode: **Docker for checks**. Development, the dev window and builds run on this Mac with Node.js and Rust. `docker compose run --rm --build check` runs `npm ci && npm run check` in a clean Linux container, like CI: use it before releases or when a check might depend on this Mac's setup. The first run builds the image and compiles the Rust dependencies for Linux (a few minutes); the volumes keep later runs fast.
 
@@ -220,6 +234,8 @@ docker compose down --volumes --remove-orphans --rmi local   # delete the volume
 ```
 
 Clippy in the container checks the Linux build of the crate; macOS-only code (`#[cfg(target_os = "macos")]`) is checked by `npm run check` on the Mac.
+
+**Security gate:** secbase is not in the image, so the `check` service sets `SECBASE_OPTIONAL=1` and only prints `secbase skipped: …` for the security step. When you use the container, also run `npm run security` on the Mac.
 {%- endif %}
 {% endif %}
 ---

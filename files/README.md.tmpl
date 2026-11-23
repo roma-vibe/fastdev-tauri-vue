@@ -50,7 +50,8 @@ The `.dmg` is in `src-tauri/target/release/bundle/dmg/`. Builds are ad-hoc signe
 | `npm run build` | The release `.app` and `.dmg` in `src-tauri/target/release/bundle/` |
 | `npm run tauri -- <command>` | Any Tauri CLI command with the settings from `.env` |
 | `npm test` | UI tests (Vitest) and Rust tests (`cargo test`) |
-| `npm run check` | Lint (ESLint, Clippy), format check (Prettier, rustfmt), type check and all tests — the quality gate before commits |
+| `npm run check` | Lint (ESLint, Clippy), format check (Prettier, rustfmt), type check, all tests and the security check — the quality gate before commits |
+| `npm run security` | `secbase check`: secrets, vulnerable dependencies, risky code and desktop settings. Install secbase once with `npm link` in `~/Documents/secbase` |
 | `npm run lint` / `npm run lint:fix` | ESLint and Clippy / ESLint auto-fix |
 | `npm run format` | Format TypeScript, Vue and Rust files |
 | `npm run typecheck` | `vue-tsc` for the UI and the scripts |
