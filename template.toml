@@ -100,7 +100,7 @@ run = "npm test"
 
 [commands.check]
 label = "Check"
-description = "The quality gate: ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests and the secbase security check, with zero warnings."
+description = "The quality gate: ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests, the walls quality check and the secbase security check, with zero warnings."
 run = "npm run check"
 
 [commands.lint]
@@ -214,7 +214,7 @@ ecosystem = "npm"
 "Test" = "Тесты"
 "Vitest (UI and scripts) and cargo test (Rust)." = "Vitest (интерфейс и скрипты) и cargo test (Rust)."
 "Check" = "Проверка"
-"The quality gate: ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests and the secbase security check, with zero warnings." = "Контроль качества: ESLint, Clippy, Prettier, rustfmt, vue-tsc, все тесты и проверка безопасности secbase, без предупреждений."
+"The quality gate: ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests, the walls quality check and the secbase security check, with zero warnings." = "Контроль качества: ESLint, Clippy, Prettier, rustfmt, vue-tsc, все тесты, проверка качества walls и проверка безопасности secbase, без предупреждений."
 "Lint" = "Линтер"
 "ESLint and Clippy; warnings are errors." = "ESLint и Clippy; предупреждения считаются ошибками."
 "Format" = "Форматирование"

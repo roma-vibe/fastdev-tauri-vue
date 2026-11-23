@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0 — 2026-11-23
+
+_Not verified on the publishing machine: docker=run: Docker >=24; docker=full: Docker >=24._
+
+- `npm run check` now runs the walls quality gate (silenced checks, loosened lint, skipped tests, stubs, swallowed errors, invented imports, drifting docs) before secbase.
+- Added walls.json and .walls/rules.json for project walls, and a Quality walls section in AGENTS.md.
+- cookie bumped to 0.18.3 for RUSTSEC-2026-0594.
+
 ## 1.1.0 — 2026-11-23
 
 _Not verified on the publishing machine: docker=run: Docker >=24; docker=full: Docker >=24._

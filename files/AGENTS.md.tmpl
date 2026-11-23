@@ -22,7 +22,10 @@ scripts/tauri.ts            `npm run dev|build|tauri`: runs the Tauri CLI with t
 scripts/tauri-config.ts     .env → Tauri `--config` patch (productName, identifier, devUrl)
 scripts/env.ts              Reads .env (Node's built-in parser) for scripts/tauri.ts and vite.config.ts
 scripts/security.ts         `npm run security`: runs `secbase check` and passes its exit code through
+scripts/walls.ts            `npm run walls`: runs `walls check` and passes its exit code through
 secbase.json                secbase profile (`desktop`) and written exceptions; see Security
+walls.json                  walls settings (ignored paths, allowed findings with reasons); see Quality walls
+.walls/rules.json           project walls (data only), see Quality walls
 vite.config.ts              Vite + Vitest config: PUBLIC_ENV_KEYS, dev server port, build target
 index.html                  %APP_NAME% is replaced at build time
 app-icon.svg                Source of the app icon (`npm run tauri icon app-icon.svg` regenerates src-tauri/icons)
@@ -92,7 +95,8 @@ Vue page → Pinia store → API client (src/api) → invoke → Tauri command �
 | `npm run build -- --debug` | Faster unoptimized bundle with DevTools, in `src-tauri/target/debug/bundle` |
 | `npm run tauri -- <command>` | Any Tauri CLI command with the `.env` settings (`npm run tauri info`, `npm run tauri icon app-icon.svg`) |
 | `npm test` | All tests: Vitest (`test/`, `scripts/`) and `cargo test` |
-| `npm run check` | **Quality gate:** ESLint + Clippy, Prettier + rustfmt check, vue-tsc, all tests, `secbase check`; zero warnings |
+| `npm run check` | **Quality gate:** ESLint + Clippy, Prettier + rustfmt check, vue-tsc, all tests, `walls check`, `secbase check`; zero warnings |
+| `npm run walls` | `walls check` alone; extra arguments after `--` go to walls (`npm run walls -- --json`) |
 | `npm run security` | `secbase check` alone; extra arguments after `--` go to secbase (`npm run security -- --strict`) |
 | `npm run lint` / `npm run lint:fix` | ESLint (UI) and Clippy (Rust, warnings are errors) / auto-fix ESLint problems |
 | `npm run format` | Prettier and rustfmt write the formatting |
@@ -187,9 +191,18 @@ Model/input structs → repository method (if SQL is needed) → service method 
 - **Before touching** auth, input handling, outbound URLs, uploads, LLM features, CI or the desktop config (`tauri.conf.json`, capabilities), read `secbase checklist <area>` (`secbase checklist` lists the areas).
 - `npm run check` ends with `npm run security` (`secbase check`), which must pass. Install secbase once: `npm link` in `~/Documents/secbase`. Without it the step fails, in CI too; only `SECBASE_OPTIONAL=1` turns that into a skip with a notice{% if choices.docker != "none" %} (the Docker containers set it because secbase is not in the image, so run `npm run security` on this Mac too){% endif %}. Never set it to get a green check.
 
+## Quality walls
+
+`walls` is the model-free code-quality gate: fixed rules, same answer every time. `npm run check` includes `walls check` right before the security step; `npm run walls` runs it alone (`npm run walls -- --json` for the full report). Project settings are in `walls.json`, project walls in `.walls/rules.json`.
+
+- Never weaken the lint, tsc or clippy configuration (rules, `strict`, `--max-warnings`, `-D warnings`) and never add a suppression without a reason. A finding is silenced only with a `walls-ignore <rule>: <reason>` comment on its line or the line above; fix the cause first.
+- When a reviewer or the owner points out a mistake for the second time, do not write a note: add a project wall to `.walls/rules.json` (`id` `project/<name>`, `message`, `pattern`, `files` and a `reason` that names the incident), then fix the current hits.
+- `walls rules` lists the built-in rules; `walls rules --explain <id>` says why a rule exists. Do not edit `.walls/baseline.json` by hand: `walls baseline` rewrites it. Loosening the gate (a new `ignore` entry `{ "path", "reason" }` or `allow` entry in `walls.json`, a weaker project wall, a bigger baseline) is a `gate/loosened` error until the owner commits it: ask him instead.
+- Install walls once: `npm link` in `~/Documents/walls`. Without it the step fails, in CI too; only `WALLS_OPTIONAL=1` turns that into a skip with a notice{% if choices.docker != "none" %} (the Docker containers set it because walls is not in the image, so run `npm run walls` on this Mac too){% endif %}. Never set it to get a green check.
+
 ## Definition of done
 
-1. `npm run check` passes with **zero** errors and warnings (ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests, `secbase check`){% if choices.docker == "full" %} — run it as `docker compose run --rm dev npm run check`{% endif %}.
+1. `npm run check` passes with **zero** errors and warnings (ESLint, Clippy, Prettier, rustfmt, vue-tsc, all tests, `walls check`, `secbase check`){% if choices.docker == "full" %} — run it as `docker compose run --rm dev npm run check`{% endif %}.
 2. `npm run build` succeeds and the built app starts (`open src-tauri/target/release/bundle/macos/*.app`).
 3. New behaviour is covered by tests, and the changed flow works in `npm run dev`.
 4. Rust structs and their TypeScript mirrors (`src/api/*.ts`) match; new commands are registered in `lib.rs`; new permissions are the narrowest possible.
@@ -224,7 +237,7 @@ docker compose down --volumes --remove-orphans --rmi local   # delete containers
 
 Clippy in the container checks the Linux build of the crate; macOS-only code (`#[cfg(target_os = "macos")]`) is compiled by `npm run build` on the Mac, so run it before finishing such changes.
 
-**Security gate:** secbase is not in the image, so the `dev` service sets `SECBASE_OPTIONAL=1` and `npm run check` in the container only prints `secbase skipped: …`. In this mode you must also run `npm run security` on the Mac before finishing.
+**Security and quality gates:** secbase and walls are not in the image, so the `dev` service sets `SECBASE_OPTIONAL=1` and `WALLS_OPTIONAL=1` and `npm run check` in the container only prints `secbase skipped: …` and `walls skipped: …`. In this mode you must also run `npm run walls` and `npm run security` on the Mac before finishing.
 {%- else %}
 Mode: **Docker for checks**. Development, the dev window and builds run on this Mac with Node.js and Rust. `docker compose run --rm --build check` runs `npm ci && npm run check` in a clean Linux container, like CI: use it before releases or when a check might depend on this Mac's setup. The first run builds the image and compiles the Rust dependencies for Linux (a few minutes); the volumes keep later runs fast.
 
@@ -235,7 +248,7 @@ docker compose down --volumes --remove-orphans --rmi local   # delete the volume
 
 Clippy in the container checks the Linux build of the crate; macOS-only code (`#[cfg(target_os = "macos")]`) is checked by `npm run check` on the Mac.
 
-**Security gate:** secbase is not in the image, so the `check` service sets `SECBASE_OPTIONAL=1` and only prints `secbase skipped: …` for the security step. When you use the container, also run `npm run security` on the Mac.
+**Security and quality gates:** secbase and walls are not in the image, so the `check` service sets `SECBASE_OPTIONAL=1` and `WALLS_OPTIONAL=1` and only prints `secbase skipped: …` and `walls skipped: …` for those steps. When you use the container, also run `npm run walls` and `npm run security` on the Mac.
 {%- endif %}
 {% endif %}
 ---
